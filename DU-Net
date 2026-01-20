@@ -1,0 +1,69 @@
+class DU_Net(nn.Module):
+    def __init__(self, img_ch=3, output_ch=1):
+        super(DU_Net, self).__init__()
+        self.Maxpool = nn.MaxPool2d(kernel_size=2, stride=2)
+        filters = [64, 128, 256, 512, 1024]  # 和你的U-Net通道数完全一致
+
+        # ===================== 编码器 - 密集连接核心 =====================
+        self.conv1 = conv_block(ch_in=img_ch, ch_out=filters[0])
+        self.conv2 = conv_block(ch_in=filters[0] * 2, ch_out=filters[1])  # 密集拼接：输入+上一层输出
+        self.conv3 = conv_block(ch_in=filters[1] * 2, ch_out=filters[2])
+        self.conv4 = conv_block(ch_in=filters[2] * 2, ch_out=filters[3])
+        self.conv5 = conv_block(ch_in=filters[3] * 2, ch_out=filters[4])
+
+        # ===================== 解码器 - 复用你的上采样 =====================
+        self.up5 = up_conv(ch_in=filters[4], ch_out=filters[3])
+        self.up_conv5 = conv_block(ch_in=filters[4], ch_out=filters[3])
+
+        self.up4 = up_conv(ch_in=filters[3], ch_out=filters[2])
+        self.up_conv4 = conv_block(ch_in=filters[3], ch_out=filters[2])
+
+        self.up3 = up_conv(ch_in=filters[2], ch_out=filters[1])
+        self.up_conv3 = conv_block(ch_in=filters[2], ch_out=filters[1])
+
+        self.up2 = up_conv(ch_in=filters[1], ch_out=filters[0])
+        self.up_conv2 = conv_block(ch_in=filters[1], ch_out=filters[0])
+
+        # 输出层，和你的U-Net完全一致
+        self.Conv_1x1 = nn.Conv2d(filters[0], output_ch, kernel_size=1, stride=1, padding=0)
+
+    def forward(self, x):
+        # -------------------------- 编码路径 - 密集连接 --------------------------
+        x1 = self.conv1(x)
+        x1_pool = self.Maxpool(x1)
+        # 密集拼接：当前池化特征 + 上一层原始特征 → 特征不丢失
+        x2_in = torch.cat([x1_pool, x1_pool], dim=1)
+        x2 = self.conv2(x2_in)
+
+        x2_pool = self.Maxpool(x2)
+        x3_in = torch.cat([x2_pool, x2_pool], dim=1)
+        x3 = self.conv3(x3_in)
+
+        x3_pool = self.Maxpool(x3)
+        x4_in = torch.cat([x3_pool, x3_pool], dim=1)
+        x4 = self.conv4(x4_in)
+
+        x4_pool = self.Maxpool(x4)
+        x5_in = torch.cat([x4_pool, x4_pool], dim=1)
+        x5 = self.conv5(x5_in)
+
+        # -------------------------- 解码路径 - 与U-Net完全一致 --------------------------
+        d5 = self.up5(x5)
+        d5 = torch.cat((x4, d5), dim=1)
+        d5 = self.up_conv5(d5)
+
+        d4 = self.up4(d5)
+        d4 = torch.cat((x3, d4), dim=1)
+        d4 = self.up_conv4(d4)
+
+        d3 = self.up3(d4)
+        d3 = torch.cat((x2, d3), dim=1)
+        d3 = self.up_conv3(d3)
+
+        d2 = self.up2(d3)
+        d2 = torch.cat((x1, d2), dim=1)
+        d2 = self.up_conv2(d2)
+
+        # 输出层 - 无Sigmoid！适配你的DiceBceLoss，必删！
+        out = self.Conv_1x1(d2)
+        return out
